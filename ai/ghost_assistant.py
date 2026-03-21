@@ -1,46 +1,51 @@
-import httpx
+import os
 import json
 import logging
 from pydantic import BaseModel, ValidationError
+from groq import AsyncGroq
 
 logger = logging.getLogger(__name__)
 
-# 1. The Strict Output Schema
+# Initialize the Groq Client (it automatically looks for the GROQ_API_KEY environment variable)
+# We use AsyncGroq so your server doesn't freeze while the AI is thinking
+client = AsyncGroq(
+    api_key=os.environ.get("GROQ_API_KEY"),
+)
+
 class WorkOrderSchema(BaseModel):
     category: str
     urgency: str
     summary_for_technician: str
 
 async def generate_work_order(customer_message: str) -> dict | None:
-    """Sends the customer request to local Ollama and guarantees JSON output."""
+    """Sends the customer request to Groq Cloud LLM and guarantees JSON output."""
     
     system_prompt = """
     You are the 'Ghost Assistant', an autonomous dispatch brain for an Indian home services marketplace.
-    Read the customer complaint and output STRICT JSON matching this schema exactly:
-    {"category": "AC_REPAIR|PLUMBING|ELECTRICAL|OUTSTATION_CAB|UNKNOWN", "urgency": "CRITICAL|HIGH|ROUTINE", "summary_for_technician": "A 1-sentence technical summary"}
-    Do not output any markdown formatting, conversational text, or explanations. Just the JSON object.
+    Read the customer complaint and output STRICT JSON matching this exact structure:
+    {"category": "AC_REPAIR|PLUMBING|ELECTRICAL|OUTSTATION_CAB|UNKNOWN", "urgency": "CRITICAL|HIGH|ROUTINE", "summary_for_technician": "A clear, 1-sentence technical summary"}
     """
 
-    payload = {
-        "model": "mistral",
-        "prompt": f"{system_prompt}\nCustomer: {customer_message}",
-        "stream": False,
-        "format": "json" # Forces Ollama to lock into JSON mode
-    }
-
     try:
-        # Use httpx for asynchronous requests so your server doesn't freeze while the AI thinks
-        async with httpx.AsyncClient() as client:
-            response = await client.post("http://localhost:11434/api/generate", json=payload, timeout=20.0)
-            response.raise_for_status()
-            
-            raw_ai_text = response.json().get("response", "{}")
-            ai_data_dict = json.loads(raw_ai_text)
-            
-            # Validate the AI's output against our Pydantic schema
-            validated_order = WorkOrderSchema(**ai_data_dict)
-            return validated_order.model_dump()
+        # We use llama3 because it is incredibly fast and highly obedient with JSON
+        chat_completion = await client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": customer_message}
+            ],
+            model="llama3-8b-8192",
+            temperature=0.2, # Low temperature keeps it analytical and less creative
+            response_format={"type": "json_object"} # Forces Groq to lock into JSON mode
+        )
+        
+        # Extract the text and parse it
+        raw_ai_text = chat_completion.choices[0].message.content
+        ai_data_dict = json.loads(raw_ai_text)
+        
+        # Validate against our Pydantic schema to ensure it didn't hallucinate
+        validated_order = WorkOrderSchema(**ai_data_dict)
+        return validated_order.model_dump()
 
-    except (httpx.RequestError, json.JSONDecodeError, ValidationError) as e:
-        logger.error(f"Ghost Dispatcher Failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"Groq Dispatcher Failed: {str(e)}")
         return None
