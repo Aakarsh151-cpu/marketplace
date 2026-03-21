@@ -18,7 +18,7 @@ def startup():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", 
-        "https://marketplace-54ezlwksp-aakarsh151-cpus-projects.vercel.app/"],  
+        "https://marketplace-web-lyart.vercel.app/"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
