@@ -17,7 +17,8 @@ def startup():
 # --- CORS Configuration ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # change to frontend URL later for production
+    allow_origins=["http://localhost:3000", 
+        "https://marketplace-web-lyart.vercel.app"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
