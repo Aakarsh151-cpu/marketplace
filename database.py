@@ -1,19 +1,31 @@
-# database.py
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+import os
 
-# In production, this URL must be hidden in a .env file
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres:aakarsh111@localhost:5433/marketplace"
+# Get database URL from environment (Render/Railway)
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 
-# The engine manages the actual connections to PostgreSQL
-engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+# Safety fix for Render (postgres → postgresql)
+if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
+    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://")
 
-# SessionLocal spawns individual database conversations per web request
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Create engine
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_pre_ping=True
+)
 
+# Create session
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
+
+# Base class
 Base = declarative_base()
 
-# Dependency Injection: Provides a safe database session to our API routes
+# Dependency for DB session
 def get_db():
     db = SessionLocal()
     try:
