@@ -69,24 +69,20 @@ async def generate_work_order(customer_message: str) -> Optional[dict]:
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": customer_message},
+                {"role": "user", "content": customer_message}
             ],
+            model="llama3-8b-8192",
+            temperature=0.2, # Low temperature keeps it analytical and less creative
+            response_format={"type": "json_object"} # Forces Groq to lock into JSON mode
         )
-
-        raw_text = response.choices[0].message.content
-
-        try:
-            data = json.loads(raw_text)
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON from AI")
-            return None
-
-        try:
-            validated = WorkOrderSchema(**data)
-            return validated.model_dump()
-        except ValidationError as ve:
-            logger.error(f"Schema validation failed: {ve}")
-            return None
+        
+        # Extract the text and parse it
+        raw_ai_text = chat_completion.choices[0].message.content
+        ai_data_dict = json.loads(raw_ai_text)
+        
+        # Validate against our Pydantic schema to ensure it didn't hallucinate
+        validated_order = WorkOrderSchema(**ai_data_dict)
+        return validated_order.model_dump()
 
     except Exception as e:
         logger.error(f"Groq API failed: {str(e)}")
