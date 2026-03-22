@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
 
 
-# 🔐 Enums (strict control)
+# ================================
+# 🔐 ENUMS
+# ================================
 class CategoryEnum(str, enum.Enum):
     AC_REPAIR = "AC_REPAIR"
     PLUMBING = "PLUMBING"
@@ -27,7 +29,9 @@ class UrgencyEnum(str, enum.Enum):
     ROUTINE = "ROUTINE"
 
 
-# 📦 Strong Schema
+# ================================
+# 📦 SCHEMAS
+# ================================
 class WorkOrderSchema(BaseModel):
     category: CategoryEnum
     urgency: UrgencyEnum
@@ -38,28 +42,25 @@ class WorkOrderSchema(BaseModel):
     bill_of_materials: List[str]
 
 
-# 🧠 Main AI function
+class VisionAuditSchema(BaseModel):
+    is_verified: bool
+    audit_notes: str
+    fraud_detected: bool
+
+
+# ================================
+# 🧠 WORK ORDER GENERATOR
+# ================================
 async def generate_work_order(customer_message: str) -> Optional[dict]:
 
     system_prompt = """
-    You are the 'Ghost Assistant', an elite autonomous dispatch broker for an Indian home services marketplace.
+    You are the 'Ghost Assistant', an elite autonomous dispatch broker.
 
-    Analyze the customer complaint and generate STRICT JSON.
+    Analyze the issue and output STRICT JSON.
 
-    PRICING RULES (INR):
-    - Labor: ₹300–₹800 typical
-    - Estimate realistic parts cost
-    - If no parts → 0
-
-    OUTPUT FORMAT:
-    {
-      "category": "AC_REPAIR|PLUMBING|ELECTRICAL|OUTSTATION_CAB|UNKNOWN",
-      "urgency": "CRITICAL|HIGH|ROUTINE",
-      "summary_for_technician": "1-line technical diagnosis",
-      "estimated_labor": 400,
-      "estimated_parts": 1200,
-      "bill_of_materials": ["item1", "item2"]
-    }
+    PRICING RULES:
+    - Labor ₹300–₹800
+    - Estimate parts realistically
     """
 
     try:
@@ -71,19 +72,123 @@ async def generate_work_order(customer_message: str) -> Optional[dict]:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": customer_message}
             ],
-            model="llama3-8b-8192",
-            temperature=0.2, # Low temperature keeps it analytical and less creative
-            response_format={"type": "json_object"} # Forces Groq to lock into JSON mode
         )
-        
-        # Extract the text and parse it
-        raw_ai_text = chat_completion.choices[0].message.content
-        ai_data_dict = json.loads(raw_ai_text)
-        
-        # Validate against our Pydantic schema to ensure it didn't hallucinate
-        validated_order = WorkOrderSchema(**ai_data_dict)
-        return validated_order.model_dump()
+
+        raw_text = response.choices[0].message.content
+
+        data = json.loads(raw_text)
+        validated = WorkOrderSchema(**data)
+
+        return validated.model_dump()
 
     except Exception as e:
-        logger.error(f"Groq API failed: {str(e)}")
+        logger.error(f"WorkOrder AI failed: {str(e)}")
         return None
+
+
+# ================================
+# 🔁 RETRY WRAPPER
+# ================================
+async def generate_with_retry(customer_message: str, retries=2):
+    for _ in range(retries):
+        result = await generate_work_order(customer_message)
+        if result:
+            return result
+        await asyncio.sleep(1)
+
+    return {
+        "category": "UNKNOWN",
+        "urgency": "ROUTINE",
+        "summary_for_technician": "Manual inspection required",
+        "estimated_labor": 300,
+        "estimated_parts": 0,
+        "bill_of_materials": []
+    }
+
+
+# ================================
+# 👁️ VISION AUDIT SYSTEM
+# ================================
+async def verify_technician_work(
+    base64_image: str,
+    original_bom: List[str]
+) -> dict:
+
+    system_prompt = f"""
+    You are an elite QA AI for a home services marketplace.
+
+    Expected materials: {original_bom}
+
+    Analyze the image and verify work completion.
+
+    RULES:
+    - Detect missing components
+    - Detect fake or incomplete work
+    - Be strict (avoid false positives)
+
+    OUTPUT JSON:
+    {{
+      "is_verified": true|false,
+      "audit_notes": "1-line explanation",
+      "fraud_detected": true|false
+    }}
+    """
+
+    try:
+        response = await client.chat.completions.create(
+            model="llama-3.2-11b-vision-preview",
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Audit this technician work."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+        )
+
+        raw_text = response.choices[0].message.content
+
+        data = json.loads(raw_text)
+        validated = VisionAuditSchema(**data)
+
+        return validated.model_dump()
+
+    except ValidationError as ve:
+        logger.error(f"Vision validation failed: {ve}")
+
+    except Exception as e:
+        logger.error(f"Vision audit failed: {str(e)}")
+
+    # 🚨 Safe fallback
+    return {
+        "is_verified": False,
+        "audit_notes": "AI audit failed. Manual review required.",
+        "fraud_detected": False
+    }
+
+
+# ================================
+# 🔁 RETRY FOR VISION
+# ================================
+async def verify_with_retry(base64_image: str, bom: List[str], retries=2):
+    for _ in range(retries):
+        result = await verify_technician_work(base64_image, bom)
+        if result:
+            return result
+        await asyncio.sleep(1)
+
+    return {
+        "is_verified": False,
+        "audit_notes": "Repeated AI failure. Manual inspection needed.",
+        "fraud_detected": False
+    }
