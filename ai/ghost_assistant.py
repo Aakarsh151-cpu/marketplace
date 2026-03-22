@@ -33,7 +33,7 @@ async def generate_work_order(customer_message: str) -> dict | None:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": customer_message}
             ],
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",
             temperature=0.2, # Low temperature keeps it analytical and less creative
             response_format={"type": "json_object"} # Forces Groq to lock into JSON mode
         )
