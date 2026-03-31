@@ -3,13 +3,18 @@ import json
 import logging
 from typing import List, Optional
 from pydantic import BaseModel, ValidationError
-from groq import AsyncGroq
 import asyncio
 import enum
 
 logger = logging.getLogger(__name__)
 
-client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
+try:
+    from groq import AsyncGroq
+    client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
+except ModuleNotFoundError:
+    logger.warning("groq package not installed; falling back to default AI behavior")
+    AsyncGroq = None
+    client = None
 
 
 # ================================
@@ -62,6 +67,17 @@ async def generate_work_order(customer_message: str) -> Optional[dict]:
     - Labor ₹300–₹800
     - Estimate parts realistically
     """
+
+    if client is None:
+        logger.warning("No groq client available; returning fallback work order.")
+        return {
+            "category": "UNKNOWN",
+            "urgency": "ROUTINE",
+            "summary_for_technician": "Manual inspection required",
+            "estimated_labor": 300,
+            "estimated_parts": 0,
+            "bill_of_materials": []
+        }
 
     try:
         response = await client.chat.completions.create(
