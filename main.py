@@ -2,14 +2,18 @@ import os
 import json
 import logging
 import secrets
+import uuid
+import base64
+from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -22,6 +26,9 @@ from ai.ghost_assistant import generate_with_retry
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="SkillGrid Backend API")
+
+MEDIA_DIR = Path(os.getenv("MEDIA_DIR", "media"))
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 # CORS for dev + deployment
 app.add_middleware(
@@ -223,9 +230,9 @@ def create_booking(payload: BookingCreate, current_user: models.User = Depends(g
 
 
 @app.post("/api/workorders")
-def create_work_order(payload: WorkOrderCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Optional AI triage to auto-fill
-    ai_output = generate_with_retry(payload.customer_message)
+async def create_work_order(payload: WorkOrderCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Optional AI triage to auto-fill (without images)
+    ai_output = await generate_with_retry(payload.customer_message)
     workorder = models.WorkOrder(
         customer_id=current_user.id,
         customer_message=payload.customer_message,
@@ -297,6 +304,38 @@ async def ai_triage_dispatch(request: WorkOrderCreate, db: Session = Depends(get
     return {
         "status": "success",
         "dispatch": work_order_data
+    }
+
+
+@app.post("/api/triage/chat-with-images")
+async def ai_triage_with_images(
+    customer_message: str = Form(...),
+    files: List[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    if not customer_message:
+        raise HTTPException(status_code=400, detail="customer_message is required")
+
+    saved_base64 = []
+    for upload in files:
+        file_ext = Path(upload.filename).suffix or ".jpg"
+        target_filename = f"{uuid.uuid4().hex}{file_ext}"
+        target_path = MEDIA_DIR / target_filename
+        with open(target_path, "wb") as out_file:
+            content = await upload.read()
+            out_file.write(content)
+            saved_base64.append(base64.b64encode(content).decode())
+
+    ai_data = await generate_with_retry(customer_message, image_b64s=saved_base64 if saved_base64 else None)
+
+    if not ai_data:
+        raise HTTPException(status_code=500, detail="AI processing failed with images.")
+
+    return {
+        "status": "success",
+        "dispatch": ai_data,
+        "image_count": len(saved_base64)
     }
 
 

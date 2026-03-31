@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel, ValidationError
 import asyncio
 import enum
@@ -56,7 +56,7 @@ class VisionAuditSchema(BaseModel):
 # ================================
 # 🧠 WORK ORDER GENERATOR
 # ================================
-async def generate_work_order(customer_message: str) -> Optional[dict]:
+async def generate_work_order(customer_message: str, image_b64s: Optional[List[str]] = None) -> Optional[dict]:
 
     system_prompt = """
     You are the 'Ghost Assistant', an elite autonomous dispatch broker.
@@ -68,6 +68,9 @@ async def generate_work_order(customer_message: str) -> Optional[dict]:
     - Estimate parts realistically
     """
 
+    if image_b64s:
+        system_prompt += "\nImages were provided by the customer, prioritize visual verification and root cause diagnosis."
+
     if client is None:
         logger.warning("No groq client available; returning fallback work order.")
         return {
@@ -76,7 +79,14 @@ async def generate_work_order(customer_message: str) -> Optional[dict]:
             "summary_for_technician": "Manual inspection required",
             "estimated_labor": 300,
             "estimated_parts": 0,
-            "bill_of_materials": []
+            "bill_of_materials": [],
+            "temporary_fix": "Switch off power/water and verify leak source. Apply tape or sealant until technician arrives.",
+            "permanent_fix": "Replace failing component and re-check system pressure/leak tests.",
+            "solution_suggestions": [
+                "Isolate the issue site",
+                "Use temporary sealant or cover",
+                "Schedule licensed technician within 2 hours"
+            ]
         }
 
     try:
@@ -95,7 +105,15 @@ async def generate_work_order(customer_message: str) -> Optional[dict]:
         data = json.loads(raw_text)
         validated = WorkOrderSchema(**data)
 
-        return validated.model_dump()
+        result = validated.model_dump()
+        result.setdefault("temporary_fix", "Keep the area dry and stop the system; avoid using for 24h.")
+        result.setdefault("permanent_fix", "Install replacement part, retest, and schedule preventative service.")
+        result.setdefault("solution_suggestions", [
+            "Confirm problem location",
+            "Isolate and secure area",
+            "Follow service inspection checklist"
+        ])
+        return result
 
     except Exception as e:
         logger.error(f"WorkOrder AI failed: {str(e)}")
@@ -105,9 +123,9 @@ async def generate_work_order(customer_message: str) -> Optional[dict]:
 # ================================
 # 🔁 RETRY WRAPPER
 # ================================
-async def generate_with_retry(customer_message: str, retries=2):
+async def generate_with_retry(customer_message: str, image_b64s: Optional[List[str]] = None, retries=2):
     for _ in range(retries):
-        result = await generate_work_order(customer_message)
+        result = await generate_work_order(customer_message, image_b64s=image_b64s)
         if result:
             return result
         await asyncio.sleep(1)
@@ -118,7 +136,14 @@ async def generate_with_retry(customer_message: str, retries=2):
         "summary_for_technician": "Manual inspection required",
         "estimated_labor": 300,
         "estimated_parts": 0,
-        "bill_of_materials": []
+        "bill_of_materials": [],
+        "temporary_fix": "Switch off affected systems and do not use until pro inspection.",
+        "permanent_fix": "Replace worn/damaged component and run full diagnostic cycle.",
+        "solution_suggestions": [
+            "Keep logs and photos for technician",
+            "Use temporary containment/patch",
+            "Confirm scope before repair"
+        ]
     }
 
 
