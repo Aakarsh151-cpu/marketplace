@@ -11,10 +11,26 @@ from database import Base
 # ================================
 # 🔐 ENUMS
 # ================================
+class UserRole(str, enum.Enum):
+    CUSTOMER = "CUSTOMER"
+    TECHNICIAN = "TECHNICIAN"
+    ADMIN = "ADMIN"
+
+
 class UrgencyEnum(str, enum.Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
+
+
+class WorkOrderStatusEnum(str, enum.Enum):
+    REQUESTED = "REQUESTED"
+    ASSIGNED = "ASSIGNED"
+    EN_ROUTE = "EN_ROUTE"
+    ARRIVED = "ARRIVED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
 
 
 class EscrowStatusEnum(str, enum.Enum):
@@ -32,7 +48,9 @@ class User(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=True)
-    email = Column(String, unique=True, nullable=True)
+    email = Column(String, unique=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    role = Column(Enum(UserRole), default=UserRole.CUSTOMER, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -45,8 +63,9 @@ class Booking(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    service_name = Column(String, nullable=True)
+    service_name = Column(String, nullable=False)
     scheduled_time = Column(DateTime, nullable=True)
+    customer_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -57,34 +76,28 @@ class Booking(Base):
 class WorkOrder(Base):
     __tablename__ = "work_orders"
 
-    # 🆔 Primary ID
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    # 🔗 Foreign Keys (NOW VALID)
     booking_id = Column(UUID(as_uuid=True), ForeignKey("bookings.id"), nullable=True)
     customer_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    partner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    technician_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
-    # 📌 Core Details
     customer_message = Column(Text, nullable=False)
     category = Column(String, index=True, nullable=False)
-
     urgency = Column(Enum(UrgencyEnum), nullable=False)
     summary_for_technician = Column(Text, nullable=False)
 
-    # 🤖 AI Structured Output
+    status = Column(Enum(WorkOrderStatusEnum), default=WorkOrderStatusEnum.REQUESTED, nullable=False)
+
     ai_metadata = Column(JSON, nullable=True)
 
-    # 💰 Cost Estimation
     estimated_labor_cost = Column(Float, default=0.0)
     estimated_parts_cost = Column(Float, default=0.0)
-
-    bill_of_materials = Column(JSON, nullable=True)
-
     final_labor_cost = Column(Float, nullable=True)
     final_parts_cost = Column(Float, nullable=True)
 
-    # 💳 Escrow
+    bill_of_materials = Column(JSON, nullable=True)
+
     escrow_status = Column(
         Enum(EscrowStatusEnum),
         default=EscrowStatusEnum.PENDING,
@@ -93,25 +106,20 @@ class WorkOrder(Base):
 
     escrow_transaction_id = Column(String, nullable=True)
 
-    # 📸 Proof System
     before_images = Column(JSON, nullable=True)
     after_images = Column(JSON, nullable=True)
 
-    # ⚠️ Dispute
     dispute_reason = Column(Text, nullable=True)
     dispute_status = Column(String, nullable=True)
 
-    # ⏱️ Timeline
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 
-    # 🔗 Relationships
     customer = relationship("User", foreign_keys=[customer_id])
-    partner = relationship("User", foreign_keys=[partner_id])
+    technician = relationship("User", foreign_keys=[technician_id])
     booking = relationship("Booking")
 
-    # 🧠 Computed Properties
     @property
     def total_estimated_cost(self):
         return (self.estimated_labor_cost or 0) + (self.estimated_parts_cost or 0)
@@ -126,4 +134,4 @@ class WorkOrder(Base):
 
     @property
     def is_completed(self):
-        return self.escrow_status == EscrowStatusEnum.RELEASED
+        return self.status == WorkOrderStatusEnum.COMPLETED
